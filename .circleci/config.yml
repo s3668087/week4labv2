@@ -1,0 +1,107 @@
+version: 2.1
+commands:
+  install_deps:
+    steps:
+      - run:
+          name: Install dependencies
+          command: |
+            npm install
+
+jobs:
+  ci-build:
+    docker:
+      - image: circleci/node:lts
+    environment:
+      JEST_JUNIT_OUTPUT_DIR: test-output
+    steps:
+      - checkout 
+      - install_deps
+      - run:
+          name: Run lint
+          command: npm run lint
+      - run:
+          name: Run unit tests
+          command: |
+            mkdir -p test-output
+            npm run unit-tests
+            
+      - run:
+          name: Validate Coverage
+          command: |
+            bash <(curl -s https://codecov.io/bash)
+
+      - store_test_results:
+          path: test-output
+
+  integration-tests:
+    docker:
+      - image: circleci/node:lts
+      - image: mongo:4.0
+    environment:
+      APP_PORT: 4000
+      JEST_JUNIT_OUTPUT_DIR: test-output
+    steps:
+      - checkout
+      - install_deps
+      - run:
+          name: Run integration tests
+          command: |
+            mkdir -p test-output
+            npm run integration-tests
+
+      - store_test_results:
+          path: test-output
+
+  sast:
+    docker:
+      - image: circleci/node:lts
+    steps:
+      - checkout
+      - run:
+          name: Install NodeJsScan
+          command: |
+            sudo apt update
+            sudo apt install python3-pip
+            pip3 install nodejsscan
+      - run:
+          name: Run NodeJsScan
+          command: |
+            nodejsscan -d ./ -o sast-output.json
+      - store_artifacts:
+          path: sast-output.json
+      - run:
+          name: Parse sast report
+          command: |
+            # exit with a non-zero exit code if there are any security issues
+            exit $(cat sast-output.json | jq .total_count.sec)
+
+  pack:
+    docker:
+      - image: circleci/node:lts
+    environment:
+      NODE_ENV: production
+    steps:
+      - checkout
+      - install_deps
+      - store_artifacts:
+          path: ./
+
+workflows:
+  build-and-packge:
+    jobs:
+      - ci-build
+      - integration-tests:
+          requires:
+            - ci-build
+      - sast:
+          requires:
+            - ci-build
+      - pack:
+          requires:
+            - integration-tests
+            - sast
+          filters:
+            branches:
+              only:
+                - master
+            
